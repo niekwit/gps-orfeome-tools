@@ -9,6 +9,7 @@ import requests
 import json
 import itertools
 
+from tqdm import tqdm
 import pandas as pd
 from Bio import Align
 from Bio.Align import substitution_matrices
@@ -30,9 +31,9 @@ def initialise_logging():
     log = f"check_sequences_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.log"
     logging.basicConfig(
         format="%(levelname)s:%(asctime)s:%(message)s",
-        level=logging.DEBUG,
+        level=logging.INFO,
         datefmt="%Y-%m-%d %H:%M:%S",
-        handlers=[logging.FileHandler(log)],
+        handlers=[logging.FileHandler(log), logging.StreamHandler()],
     )
 
     # Disable DEBUG logging for 'requests' and 'urllib3' (used by requests)
@@ -402,9 +403,12 @@ def main():
     # Check if the canonical sequences match the ORF amino acid sequences
     logging.info(" Checking if canonical sequences match ORF amino acid sequences.")
     results = []
-    for canonical_sequence, amino_acid_sequence in zip(
-        annotation_df["canonical_sequence"],
-        orf_amino_acid_sequences,
+    for canonical_sequence, amino_acid_sequence in tqdm(
+        zip(
+            annotation_df["canonical_sequence"],
+            orf_amino_acid_sequences,
+        ),
+        total=len(annotation_df),
     ):
         if canonical_sequence == amino_acid_sequence:
             results.append(True)
@@ -416,12 +420,16 @@ def main():
         " Generating CIGAR-like strings for each ORF id/canonical sequence pair."
     )
     cigar_strings = []
-    for canonical_sequence, amino_acid_sequence, orf_id, result in zip(
-        annotation_df["canonical_sequence"],
-        orf_amino_acid_sequences,
-        annotation_df["orf_id"],
-        results,
+    for canonical_sequence, amino_acid_sequence, orf_id, result in tqdm(
+        zip(
+            annotation_df["canonical_sequence"],
+            orf_amino_acid_sequences,
+            annotation_df["orf_id"],
+            results,
+        ),
+        total=len(annotation_df),
     ):
+
         if not result:
             cigar_string = get_protein_cigar(
                 canonical_sequence, amino_acid_sequence, orf_id

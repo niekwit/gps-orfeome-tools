@@ -10,6 +10,7 @@ import json
 import itertools
 
 from tqdm import tqdm
+import numpy as np
 import pandas as pd
 from Bio import Align
 from Bio.Align import substitution_matrices
@@ -28,19 +29,49 @@ def initialise_logging():
     Returns:
         None
     """
-    log = f"check_sequences_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.log"
-    logging.basicConfig(
-        format="%(levelname)s:%(asctime)s:%(message)s",
-        level=logging.INFO,
-        datefmt="%Y-%m-%d %H:%M:%S",
-        handlers=[logging.FileHandler(log), logging.StreamHandler()],
+    # Get the root logger
+    logger = logging.getLogger()
+    # Set the root logger's level to DEBUG. This is the "lowest" level it will process.
+    # Any message below this level (e.g., NOTSET) will be ignored by the logger.
+    logger.setLevel(logging.DEBUG)
+
+    # Clear any existing handlers (important if initialise_logging is called multiple times)
+    if logger.handlers:
+        for handler in logger.handlers:
+            logger.removeHandler(handler)
+
+    # Define log file path
+    log_file_name = (
+        f"check_sequences_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.log"
     )
 
-    # Disable DEBUG logging for 'requests' and 'urllib3' (used by requests)
-    # Set their loggers to a higher level (e.g., INFO, WARNING, ERROR, CRITICAL)
+    # File Handler: for all messages (DEBUG and up)
+    file_handler = logging.FileHandler(log_file_name)
+    file_handler.setLevel(
+        logging.DEBUG
+    )  # This handler will write DEBUG and higher to the file
+    file_formatter = logging.Formatter(
+        "%(levelname)s:%(asctime)s:%(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    )
+    file_handler.setFormatter(file_formatter)
+    logger.addHandler(file_handler)
+
+    # Stream Handler: for console output (ERROR and up)
+    stream_handler = logging.StreamHandler(
+        sys.stdout
+    )  # Sends output to standard output
+    stream_handler.setLevel(
+        logging.ERROR
+    )  # <--- CHANGE IS HERE: Only log ERROR and higher to the console
+    stream_formatter = logging.Formatter(
+        "%(message)s"
+    )  # Simpler format for console (just the message)
+    stream_handler.setFormatter(stream_formatter)
+    logger.addHandler(stream_handler)
+
+    # Disable DEBUG logging for 'requests', 'urllib3', and 'http.client'
     logging.getLogger("requests").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
-    # The 'http.client' module is often the one generating the "GET /..." messages
     logging.getLogger("http.client").setLevel(logging.WARNING)
 
 
@@ -111,6 +142,9 @@ def get_protein_sequence(gene_symbol, orf_id, organism_name):
     # Sometimes the annotation may contain gene symbols as zero or missing value, etc
     # Skip these
     if gene_symbol == "0" or gene_symbol == 0 or gene_symbol == "":
+        logging.warning(f" Skipping invalid gene symbol: {orf_id} {gene_symbol}")
+        return None, None
+    elif type(gene_symbol) != str:
         logging.warning(f" Skipping invalid gene symbol: {orf_id} {gene_symbol}")
         return None, None
 

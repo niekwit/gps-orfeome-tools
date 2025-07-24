@@ -7,10 +7,11 @@ import logging
 import datetime
 import requests
 import json
+import itertools
 
+import pandas as pd
 from Bio import Align
 from Bio.Align import substitution_matrices
-import pandas as pd
 
 VERSION = "0.1.0"
 
@@ -204,6 +205,79 @@ def get_protein_sequence(gene_symbol, orf_id, organism_name):
         return None, None
 
 
+def get_protein_cigar(seq1, seq2, orf_id):
+    """
+    Compares two amino acid sequences and returns an extended CIGAR-like string.
+
+    This function performs a global alignment using the Needleman-Wunsch algorithm
+    with a common protein substitution matrix (BLOSUM62) and affine gap penalties.
+
+    Args:
+        seq1 (str): The first amino acid sequence.
+        seq2 (str): The second amino acid sequence.
+        orf_id (str): The identifier for the ORF (Open Reading Frame) being compared.
+
+    Returns:
+        The extended CIGAR-like string representing the alignment of the two sequences.
+
+        Returns ("N/A") if no valid alignment can be found.
+    """
+    if not seq1 or not seq2:
+        return "NA"
+
+    # Initialize the aligner
+    aligner = Align.PairwiseAligner()
+    aligner.substitution_matrix = substitution_matrices.load("BLOSUM62")
+    aligner.open_gap_score = -10  # Penalty for opening a gap in seq1
+    aligner.extend_gap_score = -0.5  # Penalty for extending a gap in seq1
+    aligner.target_open_gap_score = -10  # Penalty for opening a gap in seq2
+    aligner.target_extend_gap_score = -0.5  # Penalty for extending a gap in seq2
+    aligner.mode = "global"
+
+    # Perform the alignment
+    # aligner(seq1, seq2) returns an Alignments object which is iterable.
+    # It might return multiple equally-scoring alignments. We usually take the first.
+    alignments = list(aligner.align(seq1, seq2))
+
+    if not alignments:
+        logging.warning(f"No valid alignments found for {orf_id}.")
+        return "NA"
+
+    # Get the best alignment (usually the first one returned)
+    best_alignment = alignments[0]
+
+    # Manually construct the CIGAR-like string
+    gapped_seq1 = str(best_alignment[0])  # Get the gapped query sequence
+    gapped_seq2 = str(best_alignment[1])  # Get the gapped target sequence
+
+    extended_cigar_ops_raw = []
+    for i in range(len(gapped_seq1)):
+        char1 = gapped_seq1[i]
+        char2 = gapped_seq2[i]
+
+        if char1 != "-" and char2 != "-":
+            if char1 == char2:
+                extended_cigar_ops_raw.append("=")  # Exact match
+            else:
+                extended_cigar_ops_raw.append("X")  # Mismatch
+        elif char1 == "-":
+            extended_cigar_ops_raw.append(
+                "I"
+            )  # Insertion in query (seq1 has gap, seq2 has char)
+        elif char2 == "-":
+            extended_cigar_ops_raw.append(
+                "D"
+            )  # Deletion from query (seq1 has char, seq2 has gap)
+
+    # Consolidate consecutive operations into CIGAR format (e.g., MMM -> 3M)
+    cigar_string = ""
+    if extended_cigar_ops_raw:
+        for k, g in itertools.groupby(extended_cigar_ops_raw):
+            cigar_string += str(len(list(g))) + k
+
+    return cigar_string
+
+
 def main():
 
     # Set up the argument parser
@@ -263,6 +337,7 @@ def main():
     args = parser.parse_args()
 
     # Load annotation file
+    logging.info(f" Loading annotation file: {args.file}")
     delimiter = detect_csv_delimiter(args.file)
     if not delimiter:
         logging.error(" Could not detect CSV delimiter. Exiting.")
@@ -286,6 +361,9 @@ def main():
 
     # Retrieve the canonical protein sequences for each gene symbol that
     # relates to the ORF id
+    logging.info(
+        f" Retrieving canonical protein sequences for {len(gene_symbols)} gene symbols."
+    )
     canonical_sequences = []
     uniprot_accessions = []
     for gene_symbol, orf_id in zip(gene_symbols, orf_ids):
@@ -306,6 +384,7 @@ def main():
     )
 
     # Get the amino acid sequences for each ORF id/gene symbol
+    logging.info(f" Retrieving amino acid sequences for {len(annotation_df)} ORF ids.")
     if args.aminoacid_column not in annotation.columns:
         logging.error(
             f" Amino acid column '{args.aminoacid_column}' not found in annotation file."
@@ -321,6 +400,7 @@ def main():
     ]
 
     # Check if the canonical sequences match the ORF amino acid sequences
+    logging.info(" Checking if canonical sequences match ORF amino acid sequences.")
     results = []
     for canonical_sequence, amino_acid_sequence in zip(
         annotation_df["canonical_sequence"],
@@ -331,6 +411,27 @@ def main():
         else:
             results.append(False)
 
+    # Generate CIGAR-like strings for each ORF id
+    logging.info(
+        " Generating CIGAR-like strings for each ORF id/canonical sequence pair."
+    )
+    cigar_strings = []
+    for canonical_sequence, amino_acid_sequence, orf_id, result in zip(
+        annotation_df["canonical_sequence"],
+        orf_amino_acid_sequences,
+        annotation_df["orf_id"],
+        results,
+    ):
+        if not result:
+            cigar_string = get_protein_cigar(
+                canonical_sequence, amino_acid_sequence, orf_id
+            )
+            cigar_strings.append(cigar_string)
+        else:
+            # If the sequences match, we can return a simple match CIGAR string
+            cigar_string = f"{len(canonical_sequence)}="  # Match CIGAR string
+            cigar_strings.append(cigar_string)
+
     # Create a DataFrame for the results: orf_id and whether the sequence matches
     results_df = pd.DataFrame(
         {
@@ -338,17 +439,19 @@ def main():
             "uniprot_accession": annotation_df["uniprot_accession"],
             "canonical_sequence": annotation_df["canonical_sequence"],
             "orf_amino_acid_sequence": orf_amino_acid_sequences,
-            "match": results,
+            "cigarx_string": cigar_strings,
         }
     )
 
     # Load GPSW gene summary CSV file
+    logging.info(f" Loading gene summary CSV file: {args.csv_file}")
     if not os.path.exists(args.csv_file):
         logging.error(f" Gene summary CSV file '{args.csv_file}' not found.")
         sys.exit(1)
     gene_summary_df = pd.read_csv(args.csv_file)
 
     # Add to gene summary DataFrame
+    logging.info(" Merging results with gene summary data.")
     gene_summary_df = pd.merge(
         gene_summary_df,
         results_df,
@@ -362,6 +465,7 @@ def main():
 
     logging.info(f" Results saved to '{outfile}'.")
     print("Done!")
+
 
 if __name__ == "__main__":
     initialise_logging()  # Initialize logging

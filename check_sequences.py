@@ -69,7 +69,7 @@ def initialise_logging():
     file_handler = logging.FileHandler(log_file_name)
     file_handler.setLevel(logging.DEBUG)
     file_formatter = logging.Formatter(
-        "%(levelname)s:%(asctime)s:%(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+        "%(levelname)s:%(asctime)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
     )
     file_handler.setFormatter(file_formatter)
     logger.addHandler(file_handler)
@@ -155,10 +155,10 @@ def get_protein_sequence(gene_symbol, orf_id, organism_name):
     # Sometimes the annotation may contain gene symbols as zero or missing value, etc
     # Skip these
     if gene_symbol == "0" or gene_symbol == 0 or gene_symbol == "":
-        logging.warning(f" Skipping invalid gene symbol: {orf_id} {gene_symbol}")
+        logging.warning(f"Skipping invalid gene symbol: {orf_id} {gene_symbol}")
         return None, None
     elif type(gene_symbol) != str:
-        logging.warning(f" Skipping invalid gene symbol: {orf_id} {gene_symbol}")
+        logging.warning(f"Skipping invalid gene symbol: {orf_id} {gene_symbol}")
         return None, None
 
     # Also check for gene symbols that have been converted to a date by Excel
@@ -172,7 +172,7 @@ def get_protein_sequence(gene_symbol, orf_id, organism_name):
         num = num.lstrip("0")
         gene_symbol = f"MARCHF{num}"
 
-        logging.info(f" Corrected gene symbol: {old_gene_symbol} to {gene_symbol}")
+        logging.info(f"Corrected gene symbol: {old_gene_symbol} to {gene_symbol}")
     elif re.search("^[0-9]+\-Sep$", gene_symbol):
         old_gene_symbol = gene_symbol
         # Extract numerical component from gene_symbol
@@ -182,7 +182,7 @@ def get_protein_sequence(gene_symbol, orf_id, organism_name):
         num = num.lstrip("0")
         gene_symbol = f"SEPTIN{num}"
 
-        logging.info(f" Corrected gene symbol: {old_gene_symbol} to {gene_symbol}")
+        logging.info(f"Corrected gene symbol: {old_gene_symbol} to {gene_symbol}")
 
     # Base URL for UniProtKB search endpoint
     UNIPROT_SEARCH_URL = "https://rest.uniprot.org/uniprotkb/search"
@@ -219,37 +219,37 @@ def get_protein_sequence(gene_symbol, orf_id, organism_name):
                 return sequence, uniprot_accession
             else:
                 logging.warning(
-                    f" Missing accession or sequence in UniProt response for: {gene_symbol}."
+                    f"Missing accession or sequence in UniProt response for: {gene_symbol}."
                 )
                 return None, None
         else:
             logging.warning(
-                f" No canonical UniProt entry found for: '{gene_symbol}' in '{organism_name}'."
+                f"No canonical UniProt entry found for: '{gene_symbol}' in '{organism_name}'."
             )
             return None, None
 
     except requests.exceptions.HTTPError as http_err:
         logging.error(
-            f" HTTP error occurred: {http_err} - {response.text}"
+            f"HTTP error occurred: {http_err} - {response.text}"
         )  # Print response text for more details
         return None, None
     except requests.exceptions.ConnectionError as conn_err:
-        logging.error(f" Connection error occurred: {conn_err}")
+        logging.error(f"Connection error occurred: {conn_err}")
         return None, None
     except requests.exceptions.Timeout as timeout_err:
-        logging.error(f" Timeout error occurred: {timeout_err}")
+        logging.error(f"Timeout error occurred: {timeout_err}")
         return None, None
     except requests.exceptions.RequestException as req_err:
-        logging.error(f" UniProt request error: {req_err}")
+        logging.error(f"UniProt request error: {req_err}")
         return None, None
     except json.JSONDecodeError as json_err:
-        logging.error(f" Decoding error JSON response from UniProt: {json_err}")
+        logging.error(f"Decoding error JSON response from UniProt: {json_err}")
         logging.error(
-            f" Problematic response content: {response.text[:500]}..."
+            f"Problematic response content: {response.text[:500]}..."
         )  # Show part of the response
         return None, None
     except Exception as e:
-        logging.error(f" An unexpected error occurred: {e}")
+        logging.error(f"An unexpected error occurred: {e}")
         return None, None
 
 
@@ -328,32 +328,42 @@ def get_protein_cigar(seq1, seq2, orf_id):
 
 def main():
     # Load annotation file
-    logging.info(f" Loading annotation file: {args.file}")
+    logging.info(f"Loading annotation file: {args.file}")
     delimiter = detect_csv_delimiter(args.file)
     if not delimiter:
-        logging.error(" Could not detect CSV delimiter. Exiting.")
+        logging.error("Could not detect CSV delimiter. Exiting.")
         sys.exit(1)
     annotation = pd.read_csv(args.file, delimiter=delimiter)
 
     # Get all gene symbols/orf ids from the annotation file
     if args.gene_column not in annotation.columns:
-        logging.error(
-            f" Gene column '{args.gene_column}' not found in annotation file."
-        )
+        logging.error(f"Gene column '{args.gene_column}' not found in annotation file.")
         sys.exit(1)
 
     gene_symbols = annotation[args.gene_column]
 
     if args.orf_column not in annotation.columns:
-        logging.error(f" ORF column '{args.orf_column}' not found in annotation file.")
+        logging.error(f"ORF column '{args.orf_column}' not found in annotation file.")
         sys.exit(1)
 
     orf_ids = annotation[args.orf_column]
 
+    # First check if intermediate results already exist
+    intermediate_file = args.file.replace(".csv", "_intermediate.csv")
+    if os.path.exists(intermediate_file):
+        logging.info(
+            f"Intermediate results found at '{intermediate_file}'. Loading existing data."
+        )
+        annotation_df = pd.read_csv(intermediate_file)
+        # Ensure the columns are in the expected order
+        annotation_df = annotation_df[
+            ["orf_id", "canonical_sequence", "uniprot_accession"]
+        ]
+
     # Retrieve the canonical protein sequences for each gene symbol that
     # relates to the ORF id
     logging.info(
-        f" Retrieving canonical protein sequences for {len(gene_symbols)} gene symbols."
+        f"Retrieving canonical protein sequences for {len(gene_symbols)} gene symbols."
     )
     canonical_sequences = []
     uniprot_accessions = []
@@ -374,11 +384,15 @@ def main():
         }
     )
 
+    # Save intermediate results to a CSV file
+    if not os.path.exists(intermediate_file):
+        annotation_df.to_csv(intermediate_file, index=False)
+
     # Get the amino acid sequences for each ORF id/gene symbol
-    logging.info(f" Retrieving amino acid sequences for {len(annotation_df)} ORF ids.")
+    logging.info(f"Retrieving amino acid sequences for {len(annotation_df)} ORF ids.")
     if args.aminoacid_column not in annotation.columns:
         logging.error(
-            f" Amino acid column '{args.aminoacid_column}' not found in annotation file."
+            f"Amino acid column '{args.aminoacid_column}' not found in annotation file."
         )
         sys.exit(1)
 
@@ -391,7 +405,7 @@ def main():
     ]
 
     # Check if the canonical sequences match the ORF amino acid sequences
-    logging.info(" Checking if canonical sequences match ORF amino acid sequences.")
+    logging.info("Checking if canonical sequences match ORF amino acid sequences.")
     results = []
     for canonical_sequence, amino_acid_sequence in tqdm(
         zip(
@@ -407,7 +421,7 @@ def main():
 
     # Generate CIGAR-like strings for each ORF id
     logging.info(
-        " Generating CIGAR-like strings for each ORF id/canonical sequence pair."
+        "Generating CIGAR-like strings for each ORF id/canonical sequence pair."
     )
     cigar_strings = []
     for canonical_sequence, amino_acid_sequence, orf_id, result in tqdm(
@@ -442,14 +456,14 @@ def main():
     )
 
     # Load GPSW gene summary CSV file
-    logging.info(f" Loading gene summary CSV file: {args.csv_file}")
+    logging.info(f"Loading gene summary CSV file: {args.csv_file}")
     if not os.path.exists(args.csv_file):
-        logging.error(f" Gene summary CSV file '{args.csv_file}' not found.")
+        logging.error(f"Gene summary CSV file '{args.csv_file}' not found.")
         sys.exit(1)
     gene_summary_df = pd.read_csv(args.csv_file)
 
     # Add to gene summary DataFrame
-    logging.info(" Merging results with gene summary data.")
+    logging.info("Merging results with gene summary data.")
     gene_summary_df = pd.merge(
         gene_summary_df,
         results_df,
@@ -461,8 +475,12 @@ def main():
     outfile = args.csv_file.replace(".csv", "_annotated.csv")
     gene_summary_df.to_csv(outfile, index=False, na_rep="NA")
 
-    logging.info(f" Results saved to '{outfile}'.")
+    logging.info(f"Results saved to '{outfile}'.")
     print("Done!")
+
+    # Remove the intermediate file
+    if os.path.exists(intermediate_file):
+        os.remove(intermediate_file)
 
 
 if __name__ == "__main__":

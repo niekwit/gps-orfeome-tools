@@ -18,58 +18,69 @@ from Bio.Align import substitution_matrices
 VERSION = "0.1.0"
 
 
+# Custom filter to allow specific levels to pass to the console handler
+class ConsoleLevelFilter(logging.Filter):
+    def filter(self, record):
+        # Allow INFO, ERROR, and CRITICAL to pass
+        return record.levelno in [logging.INFO, logging.ERROR, logging.CRITICAL]
+
+
+# TQDM logging handler
+# This ensures that log messages printed during a tqdm loop
+# do not mess up the progress bar display.
+class TqdmLoggingHandler(logging.StreamHandler):
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            tqdm.write(msg, file=sys.stdout) # Use tqdm's write to not interfere with progress bar
+            self.flush()
+        except (IOError, BrokenPipeError):
+            # Handle situations where the pipe to stdout might be broken
+            pass
+        except Exception:
+            self.handleError(record)
+
+
+
 def initialise_logging():
     """
     Initialises the logging configuration for the script.
 
-    Creates a log file named with the current date and time, and sets up logging to write
-    DEBUG and higher level messages to this file. The log format includes the log level,
-    timestamp, and message.
-
-    Returns:
-        None
+    Sets up logging to write:
+    - All messages (DEBUG and higher) to a time-stamped log file.
+    - INFO, ERROR, and CRITICAL messages to the console (stdout).
+      (DEBUG and WARNING messages will only go to the log file, not the console).
     """
-    # Get the root logger
     logger = logging.getLogger()
-    # Set the root logger's level to DEBUG. This is the "lowest" level it will process.
-    # Any message below this level (e.g., NOTSET) will be ignored by the logger.
     logger.setLevel(logging.DEBUG)
 
-    # Clear any existing handlers (important if initialise_logging is called multiple times)
     if logger.handlers:
         for handler in logger.handlers:
             logger.removeHandler(handler)
 
-    # Define log file path
     log_file_name = (
         f"check_sequences_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.log"
     )
 
-    # File Handler: for all messages (DEBUG and up)
+    # 1. File Handler: for all messages (DEBUG and up)
     file_handler = logging.FileHandler(log_file_name)
-    file_handler.setLevel(
-        logging.DEBUG
-    )  # This handler will write DEBUG and higher to the file
+    file_handler.setLevel(logging.DEBUG)
     file_formatter = logging.Formatter(
         "%(levelname)s:%(asctime)s:%(message)s", datefmt="%Y-%m-%d %H:%M:%S"
     )
     file_handler.setFormatter(file_formatter)
     logger.addHandler(file_handler)
 
-    # Stream Handler: for console output (ERROR and up)
-    stream_handler = logging.StreamHandler(
-        sys.stdout
-    )  # Sends output to standard output
-    stream_handler.setLevel(
-        logging.ERROR
-    )  # <--- CHANGE IS HERE: Only log ERROR and higher to the console
-    stream_formatter = logging.Formatter(
-        "%(message)s"
-    )  # Simpler format for console (just the message)
-    stream_handler.setFormatter(stream_formatter)
-    logger.addHandler(stream_handler)
+    # 2. TQDM Logging Handler: for console output (Filtered to INFO, ERROR, CRITICAL)
+    # This replaces the standard StreamHandler to work correctly with tqdm.
+    tqdm_handler = TqdmLoggingHandler()
+    tqdm_handler.setLevel(logging.INFO) # Set base level to INFO
+    tqdm_formatter = logging.Formatter("%(message)s") # Simpler format for console
+    tqdm_handler.setFormatter(tqdm_formatter)
+    tqdm_handler.addFilter(ConsoleLevelFilter()) # Apply the custom filter
+    logger.addHandler(tqdm_handler)
 
-    # Disable DEBUG logging for 'requests', 'urllib3', and 'http.client'
+    # Disable verbose DEBUG logging from external libraries
     logging.getLogger("requests").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("http.client").setLevel(logging.WARNING)
@@ -371,6 +382,16 @@ def main():
     # Parse the command line arguments
     args = parser.parse_args()
 
+    # Log initial command
+    logging.info(f"Command executed: {' '.join(sys.argv)}")
+    
+    # Use tqdm's logging handler to combine progress bar and logs
+    # This must be done *after* initialising the main loggers but before any tqdm calls
+    tqdm_handler = TqdmLoggingHandler()
+    tqdm_handler.setFormatter(logging.Formatter("%(message)s"))
+    tqdm_handler.setLevel(logging.INFO)
+    logging.getLogger().addHandler(tqdm_handler)
+    
     # Load annotation file
     logging.info(f" Loading annotation file: {args.file}")
     delimiter = detect_csv_delimiter(args.file)
@@ -510,10 +531,8 @@ def main():
 
 
 if __name__ == "__main__":
-    initialise_logging()  # Initialize logging
-
-    # Get full command line arguments and write to log
-    logging.info(f" {' '.join(sys.argv)}")
+    # Initialize logging
+    initialise_logging()
 
     # Call the main function to execute the script
     main()

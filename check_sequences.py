@@ -32,14 +32,15 @@ class TqdmLoggingHandler(logging.StreamHandler):
     def emit(self, record):
         try:
             msg = self.format(record)
-            tqdm.write(msg, file=sys.stdout) # Use tqdm's write to not interfere with progress bar
+            tqdm.write(
+                msg, file=sys.stdout
+            )  # Use tqdm's write to not interfere with progress bar
             self.flush()
         except (IOError, BrokenPipeError):
             # Handle situations where the pipe to stdout might be broken
             pass
         except Exception:
             self.handleError(record)
-
 
 
 def initialise_logging():
@@ -49,13 +50,15 @@ def initialise_logging():
     Sets up logging to write:
     - All messages (DEBUG and higher) to a time-stamped log file.
     - INFO, ERROR, and CRITICAL messages to the console (stdout).
-      (DEBUG and WARNING messages will only go to the log file, not the console).
     """
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG)
 
+    # CRITICAL FIX: Clear all existing handlers to prevent duplicates
     if logger.handlers:
-        for handler in logger.handlers:
+        for handler in list(
+            logger.handlers
+        ):  # Use list() to avoid issues with modifying the list while iterating
             logger.removeHandler(handler)
 
     log_file_name = (
@@ -72,12 +75,11 @@ def initialise_logging():
     logger.addHandler(file_handler)
 
     # 2. TQDM Logging Handler: for console output (Filtered to INFO, ERROR, CRITICAL)
-    # This replaces the standard StreamHandler to work correctly with tqdm.
     tqdm_handler = TqdmLoggingHandler()
-    tqdm_handler.setLevel(logging.INFO) # Set base level to INFO
-    tqdm_formatter = logging.Formatter("%(message)s") # Simpler format for console
+    tqdm_handler.setLevel(logging.INFO)
+    tqdm_formatter = logging.Formatter("%(message)s")
     tqdm_handler.setFormatter(tqdm_formatter)
-    tqdm_handler.addFilter(ConsoleLevelFilter()) # Apply the custom filter
+    tqdm_handler.addFilter(ConsoleLevelFilter())
     logger.addHandler(tqdm_handler)
 
     # Disable verbose DEBUG logging from external libraries
@@ -325,73 +327,6 @@ def get_protein_cigar(seq1, seq2, orf_id):
 
 
 def main():
-
-    # Set up the argument parser
-    parser = argparse.ArgumentParser(
-        description="GPSW: A tool for analysing and processing Global Protein Stability Profiling data.",
-        prog="gpsw",
-    )
-    parser.add_argument(
-        "--version",
-        action="version",
-        version=VERSION,
-    )
-
-    parser.add_argument(
-        "-f",
-        "--file",
-        type=str,
-        help="Annotation file containing gene symbols and amino acid sequences to check",
-    )
-
-    parser.add_argument(
-        "-g",
-        "--gene-column",
-        type=str,
-        help="Column name that contains gene symbols to retrieve the canonical protein sequence for (from annotation file)",
-    )
-
-    parser.add_argument(
-        "-o",
-        "--orf-column",
-        type=str,
-        help="Column name that contains ORF identifiers to retrieve the canonical protein sequence for (from annotation file)",
-    )
-
-    parser.add_argument(
-        "-a",
-        "--aminoacid-column",
-        type=str,
-        help="Column name that contains the ORF library amino acid sequences to retrieve the canonical protein sequence for (from annotation file)",
-    )
-
-    parser.add_argument(
-        "-c",
-        "--csv-file",
-        type=str,
-        help="Gene summary CSV (GPSW output)",
-    )
-
-    parser.add_argument(
-        "--organism",
-        type=str,
-        default="Human",
-        help="Organism name (e.g., 'Human', 'Mouse')",
-    )
-
-    # Parse the command line arguments
-    args = parser.parse_args()
-
-    # Log initial command
-    logging.info(f"Command executed: {' '.join(sys.argv)}")
-    
-    # Use tqdm's logging handler to combine progress bar and logs
-    # This must be done *after* initialising the main loggers but before any tqdm calls
-    tqdm_handler = TqdmLoggingHandler()
-    tqdm_handler.setFormatter(logging.Formatter("%(message)s"))
-    tqdm_handler.setLevel(logging.INFO)
-    logging.getLogger().addHandler(tqdm_handler)
-    
     # Load annotation file
     logging.info(f" Loading annotation file: {args.file}")
     delimiter = detect_csv_delimiter(args.file)
@@ -533,6 +468,65 @@ def main():
 if __name__ == "__main__":
     # Initialize logging
     initialise_logging()
+
+    # Set up the argument parser
+    parser = argparse.ArgumentParser(
+        description="GPSW: A tool for analysing and processing Global Protein Stability Profiling data.",
+        prog="gpsw",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=VERSION,
+    )
+
+    parser.add_argument(
+        "-f",
+        "--file",
+        type=str,
+        help="Annotation file containing gene symbols and amino acid sequences to check",
+    )
+
+    parser.add_argument(
+        "-g",
+        "--gene-column",
+        type=str,
+        help="Column name that contains gene symbols to retrieve the canonical protein sequence for (from annotation file)",
+    )
+
+    parser.add_argument(
+        "-o",
+        "--orf-column",
+        type=str,
+        help="Column name that contains ORF identifiers to retrieve the canonical protein sequence for (from annotation file)",
+    )
+
+    parser.add_argument(
+        "-a",
+        "--aminoacid-column",
+        type=str,
+        help="Column name that contains the ORF library amino acid sequences to retrieve the canonical protein sequence for (from annotation file)",
+    )
+
+    parser.add_argument(
+        "-c",
+        "--csv-file",
+        type=str,
+        help="Gene summary CSV (GPSW output)",
+    )
+
+    parser.add_argument(
+        "--organism",
+        type=str,
+        default="Human",
+        help="Organism name (e.g., 'Human', 'Mouse')",
+    )
+
+    # Parse the command line arguments
+    args = parser.parse_args()
+
+    # Log initial command
+    logging.info(f"Command executed: {' '.join(sys.argv)}")
 
     # Call the main function to execute the script
     main()

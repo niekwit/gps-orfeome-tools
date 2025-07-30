@@ -10,12 +10,9 @@ import json
 import itertools
 
 from tqdm import tqdm
-import numpy as np
 import pandas as pd
 from Bio import Align
 from Bio.Align import substitution_matrices
-
-VERSION = "0.1.0"
 
 
 # Custom filter to allow specific levels to pass to the console handler
@@ -172,7 +169,7 @@ def get_protein_sequence(gene_symbol, orf_id, organism_name):
         num = num.lstrip("0")
         gene_symbol = f"MARCHF{num}"
 
-        logging.info(f"Corrected gene symbol: {old_gene_symbol} to {gene_symbol}")
+        logging.warning(f"Corrected gene symbol: {old_gene_symbol} to {gene_symbol}")
     elif re.search("^[0-9]+\-Sep$", gene_symbol):
         old_gene_symbol = gene_symbol
         # Extract numerical component from gene_symbol
@@ -182,7 +179,7 @@ def get_protein_sequence(gene_symbol, orf_id, organism_name):
         num = num.lstrip("0")
         gene_symbol = f"SEPTIN{num}"
 
-        logging.info(f"Corrected gene symbol: {old_gene_symbol} to {gene_symbol}")
+        logging.warning(f"Corrected gene symbol: {old_gene_symbol} to {gene_symbol}")
 
     # Base URL for UniProtKB search endpoint
     UNIPROT_SEARCH_URL = "https://rest.uniprot.org/uniprotkb/search"
@@ -327,6 +324,24 @@ def get_protein_cigar(seq1, seq2, orf_id):
 
 
 def main():
+    # Load GPSW gene summary CSV file
+    logging.info(f"Loading gene summary CSV file: {args.csv_file}")
+    if not os.path.exists(args.csv_file):
+        logging.error(f"Gene summary CSV file '{args.csv_file}' not found.")
+        sys.exit(1)
+    gene_summary_df = pd.read_csv(args.csv_file)
+
+    if not args.all_orfs:
+        # Filter the gene summary DataFrame to only include stabilised/destabilised ORFs
+        logging.info(
+            "Filtering gene summary DataFrame for stabilised/destabilised ORFs."
+        )
+        gene_summary_df = gene_summary_df[
+            (gene_summary_df["stabilised"] == True)
+            | (gene_summary_df["destabilised"] == True)
+        ]
+        orfs_to_keep = gene_summary_df["orf_id"].unique().tolist()
+
     # Load annotation file
     logging.info(f"Loading annotation file: {args.file}")
     delimiter = detect_csv_delimiter(args.file)
@@ -334,6 +349,13 @@ def main():
         logging.error("Could not detect CSV delimiter. Exiting.")
         sys.exit(1)
     annotation = pd.read_csv(args.file, delimiter=delimiter)
+
+    if not args.all_orfs:
+        # Filter the annotation DataFrame to only include ranked ORFs in the gene summary
+        logging.info(
+            "Filtering annotation DataFrame for all ranked ORFs in GPSW gene summary."
+        )
+        annotation = annotation[annotation["orf_id"].isin(orfs_to_keep)]
 
     # Get all gene symbols/orf ids from the annotation file
     if args.gene_column not in annotation.columns:
@@ -348,18 +370,6 @@ def main():
 
     orf_ids = annotation[args.orf_column]
 
-    # First check if intermediate results already exist
-    intermediate_file = args.file.replace(".csv", "_intermediate.csv")
-    if os.path.exists(intermediate_file):
-        logging.info(
-            f"Intermediate results found at '{intermediate_file}'. Loading existing data."
-        )
-        annotation_df = pd.read_csv(intermediate_file)
-        # Ensure the columns are in the expected order
-        annotation_df = annotation_df[
-            ["orf_id", "canonical_sequence", "uniprot_accession"]
-        ]
-
     # Retrieve the canonical protein sequences for each gene symbol that
     # relates to the ORF id
     logging.info(
@@ -367,7 +377,9 @@ def main():
     )
     canonical_sequences = []
     uniprot_accessions = []
-    for gene_symbol, orf_id in zip(gene_symbols, orf_ids):
+    for gene_symbol, orf_id in tqdm(
+        zip(gene_symbols, orf_ids), total=len(gene_symbols)
+    ):
         # Get the canonical protein sequence for the gene symbol
         sequence, uniprot_accession = get_protein_sequence(
             gene_symbol, orf_id, args.organism
@@ -384,10 +396,6 @@ def main():
         }
     )
 
-    # Save intermediate results to a CSV file
-    if not os.path.exists(intermediate_file):
-        annotation_df.to_csv(intermediate_file, index=False)
-
     # Get the amino acid sequences for each ORF id/gene symbol
     logging.info(f"Retrieving amino acid sequences for {len(annotation_df)} ORF ids.")
     if args.aminoacid_column not in annotation.columns:
@@ -397,22 +405,20 @@ def main():
         sys.exit(1)
 
     orf_amino_acid_sequences = annotation[args.aminoacid_column].tolist()
-    orf_amino_acid_sequences = [seq.upper() for seq in orf_amino_acid_sequences]
 
     # Remove any non-alphabetic characters from the sequences
     orf_amino_acid_sequences = [
-        re.sub(r"[^A-Za-z]", "", seq).upper() for seq in orf_amino_acid_sequences
+        re.sub(r"[^A-Za-z]", "", seq.upper())
+        for seq in orf_amino_acid_sequences
+        if isinstance(seq, str)
     ]
 
     # Check if the canonical sequences match the ORF amino acid sequences
     logging.info("Checking if canonical sequences match ORF amino acid sequences.")
     results = []
-    for canonical_sequence, amino_acid_sequence in tqdm(
-        zip(
-            annotation_df["canonical_sequence"],
-            orf_amino_acid_sequences,
-        ),
-        total=len(annotation_df),
+    for canonical_sequence, amino_acid_sequence in zip(
+        annotation_df["canonical_sequence"],
+        orf_amino_acid_sequences,
     ):
         if canonical_sequence == amino_acid_sequence:
             results.append(True)
@@ -455,13 +461,6 @@ def main():
         }
     )
 
-    # Load GPSW gene summary CSV file
-    logging.info(f"Loading gene summary CSV file: {args.csv_file}")
-    if not os.path.exists(args.csv_file):
-        logging.error(f"Gene summary CSV file '{args.csv_file}' not found.")
-        sys.exit(1)
-    gene_summary_df = pd.read_csv(args.csv_file)
-
     # Add to gene summary DataFrame
     logging.info("Merging results with gene summary data.")
     gene_summary_df = pd.merge(
@@ -476,11 +475,7 @@ def main():
     gene_summary_df.to_csv(outfile, index=False, na_rep="NA")
 
     logging.info(f"Results saved to '{outfile}'.")
-    print("Done!")
-
-    # Remove the intermediate file
-    if os.path.exists(intermediate_file):
-        os.remove(intermediate_file)
+    logging.info("Done!")
 
 
 if __name__ == "__main__":
@@ -489,13 +484,7 @@ if __name__ == "__main__":
 
     # Set up the argument parser
     parser = argparse.ArgumentParser(
-        description="GPSW: A tool for analysing and processing Global Protein Stability Profiling data.",
-        prog="gpsw",
-    )
-    parser.add_argument(
-        "--version",
-        action="version",
-        version=VERSION,
+        description="Check ORF amino acid sequences against canonical protein sequences from UniProt."
     )
 
     parser.add_argument(
@@ -523,7 +512,7 @@ if __name__ == "__main__":
         "-a",
         "--aminoacid-column",
         type=str,
-        help="Column name that contains the ORF library amino acid sequences to retrieve the canonical protein sequence for (from annotation file)",
+        help="Column name that contains the ORF library amino acid sequences (from annotation file)",
     )
 
     parser.add_argument(
@@ -531,6 +520,13 @@ if __name__ == "__main__":
         "--csv-file",
         type=str,
         help="Gene summary CSV (GPSW output)",
+    )
+
+    parser.add_argument(
+        "--all_orfs",
+        type=bool,
+        default=False,
+        help="Annotate all ORFS or only those that are stabilised/destabilised",
     )
 
     parser.add_argument(
@@ -544,7 +540,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Log initial command
-    logging.info(f"Command executed: {' '.join(sys.argv)}")
+    logging.debug(f"Command executed: {' '.join(sys.argv)}")
 
     # Call the main function to execute the script
     main()

@@ -8,6 +8,8 @@ import datetime
 import requests
 import json
 import itertools
+import collections
+import xml.etree.ElementTree as ET
 
 from tqdm import tqdm
 import pandas as pd
@@ -83,6 +85,8 @@ def initialise_logging():
     logging.getLogger("requests").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("http.client").setLevel(logging.WARNING)
+    logging.getLogger("chardet").setLevel(logging.WARNING)
+    logging.getLogger("charset_normalizer").setLevel(logging.WARNING)
 
 
 def detect_csv_delimiter(filepath, possible_delimiters=";,\t|", num_lines_to_sniff=5):
@@ -136,118 +140,69 @@ def detect_csv_delimiter(filepath, possible_delimiters=";,\t|", num_lines_to_sni
         return None
 
 
-def get_protein_sequence(gene_symbol, orf_id, organism_name):
+def get_all_uniprot_isoforms(gene_symbol, orf_id, organism_name, max_isoforms=5):
     """
-    Retrieves the amino acid sequence of the canonical protein variant
-    for a given gene symbol and organism from the UniProt REST API.
-
-    Args:
-        gene_symbol (str): The gene symbol (e.g., "TP53").
-        organism_name (str): The common or scientific name of the organism (e.g., "Human", "Homo sapiens").
-
-    Returns:
-        tuple: A tuple containing (sequence_string, uniprot_accession_id) if found,
-               otherwise (None, None).
+    Retrieve up to `max_isoforms` UniProt isoform sequences for a given gene symbol and organism.
+    Sequences are sorted by isoform ID (e.g., Q9UH92-1, Q9UH92-2, ...).
     """
-    # Sometimes the annotation may contain gene symbols as zero or missing value, etc
-    # Skip these
-    if gene_symbol == "0" or gene_symbol == 0 or gene_symbol == "":
-        logging.warning(f"Skipping invalid gene symbol: {orf_id} {gene_symbol}")
-        return None, None
-    elif type(gene_symbol) != str:
-        logging.warning(f"Skipping invalid gene symbol: {orf_id} {gene_symbol}")
-        return None, None
-
-    # Also check for gene symbols that have been converted to a date by Excel
-    # Correct the gene name and log this
-    if re.search("^[0-9]+\-Mar$", gene_symbol):
-        old_gene_symbol = gene_symbol
-        # Extract numerical component from gene_symbol
-        num = re.sub("^(\\d+)-Mar$", "\\1", gene_symbol)
-
-        # Strip leading zeros
-        num = num.lstrip("0")
-        gene_symbol = f"MARCHF{num}"
-
-        logging.warning(f"Corrected gene symbol: {old_gene_symbol} to {gene_symbol}")
-    elif re.search("^[0-9]+\-Sep$", gene_symbol):
-        old_gene_symbol = gene_symbol
-        # Extract numerical component from gene_symbol
-        num = re.sub("^(\\d+)-Sep$", "\\1", gene_symbol)
-
-        # Strip leading zeros
-        num = num.lstrip("0")
-        gene_symbol = f"SEPTIN{num}"
-
-        logging.warning(f"Corrected gene symbol: {old_gene_symbol} to {gene_symbol}")
-
-    # Base URL for UniProtKB search endpoint
-    UNIPROT_SEARCH_URL = "https://rest.uniprot.org/uniprotkb/search"
-
-    # Query parameters:
-    # 1. 'query': Search for the gene name AND organism name.
-    #    - 'gene:<symbol>' searches the gene name field.
-    #    - 'organism_name:<name>' searches by organism name.
-    #    - 'reviewed:true' specifically requests Swiss-Prot (canonical/reviewed) entries.
-    # 2. 'format': Request JSON format.
-    # 3. 'fields': Specify which fields to retrieve (accession, sequence).
-    # 4. 'size': Limit to 1 result, as we expect the canonical to be the primary hit.
+    search_url = "https://rest.uniprot.org/uniprotkb/search"
+    query = f"gene:{gene_symbol} AND organism_name:{organism_name} AND reviewed:true"
 
     params = {
-        "query": f"gene:{gene_symbol} AND organism_name:{organism_name} AND reviewed:true",
+        "query": query,
         "format": "json",
-        "fields": "accession,sequence",
+        "fields": "accession",
         "size": 1,
     }
 
     try:
-        response = requests.get(UNIPROT_SEARCH_URL, params=params)
-        response.raise_for_status()  # Raise an HTTPError for bad responses (4xx or 5xx)
-
+        response = requests.get(search_url, params=params)
+        response.raise_for_status()
         data = response.json()
 
-        if data and data.get("results"):
-            # The first result should be the most relevant canonical entry
-            entry = data["results"][0]
-            uniprot_accession = entry.get("primaryAccession")
-            sequence = entry.get("sequence", {}).get("value")
+        if not data.get("results"):
+            logging.warning(f"No UniProt entry found for {gene_symbol} ({orf_id})")
+            return {}
 
-            if uniprot_accession and sequence:
-                return sequence, uniprot_accession
-            else:
-                logging.warning(
-                    f"Missing accession or sequence in UniProt response for: {gene_symbol}."
-                )
-                return None, None
-        else:
-            logging.warning(
-                f"No canonical UniProt entry found for: '{gene_symbol}' in '{organism_name}'."
+        canonical_accession = data["results"][0]["primaryAccession"]
+
+        # Get isoforms
+        # https://stackoverflow.com/questions/46621982/using-biopython-to-retrieve-isoform-sequences-of-a-swissprot-entry
+        # key: accesion number, value: sequence
+        isoforms = dict()
+
+        # Make a call to EBI API
+        r = requests.get(
+            "https://www.ebi.ac.uk/proteins/api/proteins/{}/isoforms".format(
+                canonical_accession
             )
-            return None, None
+        )
 
-    except requests.exceptions.HTTPError as http_err:
-        logging.error(
-            f"HTTP error occurred: {http_err} - {response.text}"
-        )  # Print response text for more details
-        return None, None
-    except requests.exceptions.ConnectionError as conn_err:
-        logging.error(f"Connection error occurred: {conn_err}")
-        return None, None
-    except requests.exceptions.Timeout as timeout_err:
-        logging.error(f"Timeout error occurred: {timeout_err}")
-        return None, None
-    except requests.exceptions.RequestException as req_err:
-        logging.error(f"UniProt request error: {req_err}")
-        return None, None
-    except json.JSONDecodeError as json_err:
-        logging.error(f"Decoding error JSON response from UniProt: {json_err}")
-        logging.error(
-            f"Problematic response content: {response.text[:500]}..."
-        )  # Show part of the response
-        return None, None
+        # Parse the returned XML
+        uniprot = ET.fromstring(r.text)
+
+        for isoform in uniprot:
+            # Get the sequence
+            seq = isoform.find("{https://uniprot.org/uniprot}sequence")
+
+            # Get the accession number
+            iso_accession = isoform.find("{https://uniprot.org/uniprot}accession")
+
+            # Store the sequence and accession number in the dictionary
+            if seq is not None and iso_accession is not None and seq.text and iso_accession.text:
+                isoforms[iso_accession.text] = seq.text
+
+        # Sort dictionary by accession number
+        sorted_isoforms = collections.OrderedDict(sorted(isoforms.items()))
+
+        # Limit to the first `max_isoforms` entries
+        sorted_isoforms = dict(list(sorted_isoforms.items())[:max_isoforms])
+
+        return sorted_isoforms
+
     except Exception as e:
-        logging.error(f"An unexpected error occurred: {e}")
-        return None, None
+        logging.error(f"Error fetching isoforms for {gene_symbol} ({orf_id}): {e}")
+        return {}
 
 
 def get_protein_cigar(seq1, seq2, orf_id):
@@ -332,7 +287,6 @@ def main():
     gene_summary_df = pd.read_csv(args.csv_file)
 
     if not args.all_orfs:
-        # Filter the gene summary DataFrame to only include stabilised/destabilised ORFs
         logging.info(
             "Filtering gene summary DataFrame for stabilised/destabilised ORFs."
         )
@@ -342,7 +296,6 @@ def main():
         ]
         orfs_to_keep = gene_summary_df["orf_id"].unique().tolist()
 
-    # Load annotation file
     logging.info(f"Loading annotation file: {args.file}")
     delimiter = detect_csv_delimiter(args.file)
     if not delimiter:
@@ -351,117 +304,63 @@ def main():
     annotation = pd.read_csv(args.file, delimiter=delimiter)
 
     if not args.all_orfs:
-        # Filter the annotation DataFrame to only include ranked ORFs in the gene summary
         logging.info(
             "Filtering annotation DataFrame for all ranked ORFs in GPSW gene summary."
         )
         annotation = annotation[annotation["orf_id"].isin(orfs_to_keep)]
 
-    # Get all gene symbols/orf ids from the annotation file
     if args.gene_column not in annotation.columns:
         logging.error(f"Gene column '{args.gene_column}' not found in annotation file.")
         sys.exit(1)
-
-    gene_symbols = annotation[args.gene_column]
-
     if args.orf_column not in annotation.columns:
         logging.error(f"ORF column '{args.orf_column}' not found in annotation file.")
         sys.exit(1)
-
-    orf_ids = annotation[args.orf_column]
-
-    # Retrieve the canonical protein sequences for each gene symbol that
-    # relates to the ORF id
-    logging.info(
-        f"Retrieving canonical protein sequences for {len(gene_symbols)} gene symbols."
-    )
-    canonical_sequences = []
-    uniprot_accessions = []
-    for gene_symbol, orf_id in tqdm(
-        zip(gene_symbols, orf_ids), total=len(gene_symbols)
-    ):
-        # Get the canonical protein sequence for the gene symbol
-        sequence, uniprot_accession = get_protein_sequence(
-            gene_symbol, orf_id, args.organism
-        )
-        canonical_sequences.append(sequence)
-        uniprot_accessions.append(uniprot_accession)
-
-    # Convert to a DataFrame
-    annotation_df = pd.DataFrame(
-        {
-            "orf_id": orf_ids,
-            "canonical_sequence": canonical_sequences,
-            "uniprot_accession": uniprot_accessions,
-        }
-    )
-
-    # Get the amino acid sequences for each ORF id/gene symbol
-    logging.info(f"Retrieving amino acid sequences for {len(annotation_df)} ORF ids.")
     if args.aminoacid_column not in annotation.columns:
         logging.error(
             f"Amino acid column '{args.aminoacid_column}' not found in annotation file."
         )
         sys.exit(1)
 
-    orf_amino_acid_sequences = annotation[args.aminoacid_column].tolist()
+    gene_symbols = annotation[args.gene_column].tolist()
+    orf_ids = annotation[args.orf_column].tolist()
+    orf_sequences_raw = annotation[args.aminoacid_column].tolist()
 
-    # Remove any non-alphabetic characters from the sequences
+    # Clean amino acid sequences
     orf_amino_acid_sequences = [
-        re.sub(r"[^A-Za-z]", "", seq.upper())
-        for seq in orf_amino_acid_sequences
-        if isinstance(seq, str)
+        re.sub(r"[^A-Za-z]", "", seq.upper()) if isinstance(seq, str) else ""
+        for seq in orf_sequences_raw
     ]
 
-    # Check if the canonical sequences match the ORF amino acid sequences
-    logging.info("Checking if canonical sequences match ORF amino acid sequences.")
     results = []
-    for canonical_sequence, amino_acid_sequence in zip(
-        annotation_df["canonical_sequence"],
-        orf_amino_acid_sequences,
-    ):
-        if canonical_sequence == amino_acid_sequence:
-            results.append(True)
-        else:
-            results.append(False)
 
-    # Generate CIGAR-like strings for each ORF id
     logging.info(
-        "Generating CIGAR-like strings for each ORF id/canonical sequence pair."
+        f"Retrieving UniProt isoform sequences and comparing for {len(gene_symbols)} entries."
     )
-    cigar_strings = []
-    for canonical_sequence, amino_acid_sequence, orf_id, result in tqdm(
-        zip(
-            annotation_df["canonical_sequence"],
-            orf_amino_acid_sequences,
-            annotation_df["orf_id"],
-            results,
-        ),
-        total=len(annotation_df),
+
+    for gene_symbol, orf_id, orf_seq in tqdm(
+        zip(gene_symbols, orf_ids, orf_amino_acid_sequences), total=len(gene_symbols)
     ):
+        isoform_dict = get_all_uniprot_isoforms(
+            gene_symbol, orf_id, args.organism, args.max_isoforms
+        )
 
-        if not result:
-            cigar_string = get_protein_cigar(
-                canonical_sequence, amino_acid_sequence, orf_id
-            )
-            cigar_strings.append(cigar_string)
-        else:
-            # If the sequences match, we can return a simple match CIGAR string
-            cigar_string = f"{len(canonical_sequence)}="  # Match CIGAR string
-            cigar_strings.append(cigar_string)
-
-    # Create a DataFrame for the results: orf_id and whether the sequence matches
-    results_df = pd.DataFrame(
-        {
-            "orf_id": annotation_df["orf_id"],
-            "uniprot_accession": annotation_df["uniprot_accession"],
-            "canonical_sequence": annotation_df["canonical_sequence"],
-            "orf_amino_acid_sequence": orf_amino_acid_sequences,
-            "cigarx_string": cigar_strings,
+        result_entry = {
+            "orf_id": orf_id,
+            "orf_amino_acid_sequence": orf_seq,
         }
-    )
 
-    # Add to gene summary DataFrame
+        for idx, (acc, iso_seq) in enumerate(isoform_dict.items(), start=1):
+            cigarx = get_protein_cigar(iso_seq, orf_seq, orf_id)
+            result_entry[f"uniprot_accession_{idx}"] = acc
+            result_entry[f"variant_sequence_{idx}"] = iso_seq
+            result_entry[f"cigarx_string_{idx}"] = cigarx
+
+        results.append(result_entry)
+
+    # Combine all the results into a dataframe
+    results_df = pd.DataFrame(results)
+
+    # Merge results back into the gene summary DataFrame
     logging.info("Merging results with gene summary data.")
     gene_summary_df = pd.merge(
         gene_summary_df,
@@ -470,10 +369,9 @@ def main():
         how="left",
     )
 
-    # Save the results to a new CSV file
+    # Save to new file
     outfile = args.csv_file.replace(".csv", "_annotated.csv")
     gene_summary_df.to_csv(outfile, index=False, na_rep="NA")
-
     logging.info(f"Results saved to '{outfile}'.")
     logging.info("Done!")
 
@@ -527,6 +425,13 @@ if __name__ == "__main__":
         type=bool,
         default=False,
         help="Annotate all ORFS or only those that are stabilised/destabilised",
+    )
+
+    parser.add_argument(
+        "--max-isoforms",
+        type=int,
+        default=5,
+        help="Maximum number of UniProt isoforms to compare against (default: 5)",
     )
 
     parser.add_argument(

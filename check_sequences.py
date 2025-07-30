@@ -189,7 +189,12 @@ def get_all_uniprot_isoforms(gene_symbol, orf_id, organism_name, max_isoforms=5)
             iso_accession = isoform.find("{https://uniprot.org/uniprot}accession")
 
             # Store the sequence and accession number in the dictionary
-            if seq is not None and iso_accession is not None and seq.text and iso_accession.text:
+            if (
+                seq is not None
+                and iso_accession is not None
+                and seq.text
+                and iso_accession.text
+            ):
                 isoforms[iso_accession.text] = seq.text
 
         # Sort dictionary by accession number

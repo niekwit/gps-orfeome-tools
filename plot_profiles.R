@@ -169,9 +169,9 @@ p <- ggplot(
   )
 ) +
   facet_wrap(~gene.id, nrow = nrow, ncol = ncol) +
-  theme_cowplot(14) +
-  geom_line(linewidth = 1) +
-  geom_point(size = 3) +
+  theme_cowplot(8) +
+  geom_line(linewidth = 0.5) +
+  geom_point(size = 2) +
   geom_point(
     data = legend_df,
     aes(x = bin, y = proportion, colour = colour),
@@ -201,6 +201,6 @@ output_file <- paste0(
 ggsave(
   filename = output_file,
   plot = p,
-  width = 4 * ncol,
-  height = 3 * nrow,
+  width = 2.2 * ncol,
+  height = 2 * nrow,
 )

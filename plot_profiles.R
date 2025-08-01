@@ -108,6 +108,9 @@ if (twinpeaks) {
   # Only keep barcodes without twin peaks
   df <- csv %>%
     filter(twin_peaks == "FALSE")
+} else {
+  # Keep all barcodes
+  df <- csv
 }
 
 # Subset csv for the specified genes
@@ -122,6 +125,8 @@ df <- df %>%
     starts_with(ref_sample),
     starts_with(test_sample),
     twin_peaks,
+    delta_PSI_mean,
+    delta_PSI_SD,
   ) %>%
   group_by(gene.id) %>%
   mutate(barcode_number = row_number(), barcode_sum = n()) %>%
@@ -157,6 +162,17 @@ legend_df <- tibble::tibble(
   gene.id = df$gene.id[1] # or any of the valid gene IDs
 )
 
+# Create a label df
+label_df <- df %>%
+  group_by(gene.id) %>%
+  summarise(
+    delta_PSI_mean = first(delta_PSI_mean),
+    delta_PSI_SD = first(delta_PSI_SD)
+  ) %>%
+  ungroup() %>%
+  mutate(
+    proportion_max = max(df$proportion, na.rm = TRUE) * 0.95
+  )
 
 # Create the plot
 p <- ggplot(
@@ -188,6 +204,24 @@ p <- ggplot(
   labs(
     x = "Bin",
     y = "Proportion of reads",
+  ) +
+  geom_text(
+    data = label_df,
+    aes(
+      x = 2,
+      y = proportion_max,
+      label = paste0(
+        "dPSI: ",
+        round(delta_PSI_mean, 2),
+        " ± ",
+        round(delta_PSI_SD, 2)
+      )
+    ),
+    colour = "black",
+    size = 2,
+    hjust = 0.5,
+    vjust = 0.5,
+    inherit.aes = FALSE
   )
 
 # Save plot to file

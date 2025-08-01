@@ -58,7 +58,7 @@ Rscript plot_profiles.R <barcode_summary.csv> <orf_names.txt> <dimensions> <twin
 - `<barcode_summary.csv>`: Path to the CSV file containing barcode summary data.
 - `<orf_names.txt>`: Path to a text file containing ORF names (one per line).
 - `<dimensions>`: String indicating the dimensions (rows x columns) of the plot (e.g., "2x3").
-- `<twinpeaks>`: String indicating whether to include barcodes with twin peaks ("twinpeaks=TRUE" or "twinpeaks=FALSE").
+- `<twinpeaks>`: String indicating whether to include barcodes with twin peaks ("keeptwinpeaks=TRUE" or "keeptwinpeaks=FALSE").
 
 #### Output
 

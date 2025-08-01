@@ -57,10 +57,7 @@ orf_file <- args[2]
 if (!file.exists(orf_file)) {
   stop(paste("Error: The file", orf_file, "does not exist."))
 } else {
-  orfs_df <- read_csv(orf_file, col_names = FALSE, show_col_types = FALSE) %>%
-    # rename columns to orf_id, category
-    rename(orf_id = X1, category = X2)
-  orfs <- orfs_df[["orf_id"]]
+  orfs <- read_lines(orf_file)
 }
 
 # Check if dimensions are provided

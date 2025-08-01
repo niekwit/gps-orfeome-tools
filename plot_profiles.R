@@ -152,7 +152,23 @@ df <- df %>%
         length.out = barcode_sum[1]
       ))[barcode_number]
     )
-  )
+  ) %>%
+  ungroup()
+
+# Order gene.ids same as parsed orfs order
+ordered_gene_ids <- c()
+for (orf_sub in orfs) {
+  # Find the gene.id in df that contains the current orf substring
+  matching_gene_id <- unique(df$gene.id[str_detect(df$gene.id, orf_sub)])
+
+  # If a match is found, add it to our list
+  if (length(matching_gene_id) > 0) {
+    ordered_gene_ids <- c(ordered_gene_ids, matching_gene_id)
+  }
+}
+df <- df %>%
+  mutate(gene.id = fct_relevel(gene.id, ordered_gene_ids))
+
 
 # Create a small dummy data frame to define legend entries
 legend_df <- tibble::tibble(

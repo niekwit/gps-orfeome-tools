@@ -2,75 +2,143 @@
 Convert ORF amino acid sequences from CSV to FASTA format
 """
 
-import argparse
 import os
-import csv
+import argparse
+import pandas as pd
 
 
-# Set up the argument parser
-parser = argparse.ArgumentParser(
-    description="Convert ORF amino acid sequences from CSV to FASTA format."
-)
+def create_fasta(df, csv, stability, args):
+    """
+    Create a FASTA file from a DataFrame containing sequence names and sequences.
+    """
+    # Merge the filtered GPSW DataFrame with the CSV DataFrame
+    df = pd.merge(df, csv, on=["orf_id", "gene"], how="inner")
 
-parser.add_argument(
-    "-i",
-    "--input",
-    required=True,
-    type=str,
-    help="Path to the input CSV file containing ORF sequences.",
-)
+    # Create a new column 'name' combining gene and ORF names
+    df["name"] = df["gene"] + "_" + df["orf_id"]
 
-parser.add_argument(
-    "-g",
-    "--gene-column",
-    default=None,
-    help="Name of the column containing gene names.",
-)
+    # Only keep name and sequence columns
+    df = df[["name", "sequence"]]
 
-parser.add_argument(
-    "-o",
-    "--orf-column",
-    default=None,
-    help="Name of the column containing ORF names.",
-)
+    # Define the output file name based on stability
+    base_name = os.path.basename(args.gpsw).replace("_gene.summary.csv", "")
+    output_file = os.path.join(args.outdir, f"{base_name}_{stability}.fasta")
 
-parser.add_argument(
-    "-s",
-    "--sequence-column",
-    required=True,
-    type=str,
-    help="Name of the column containing amino acid sequences.",
-)
+    # Prepend > to each sequence name
+    df["name"] = ">" + df["name"]
 
-args = parser.parse_args()
+    # Remove any non-alphanumeric characters from the sequences
+    df["sequence"] = df["sequence"].str.replace(r"[^A-Za-z0-9]", "", regex=True)
 
-# Check if the input file exists
-if not os.path.isfile(args.input):
-    raise FileNotFoundError(f"Input file {args.input} does not exist.")
+    # Write to FASTA file
+    df.to_csv(output_file, sep="\n", index=False, header=False)
 
-# Read the CSV file and write to FASTA format
-input_file = args.input.replace(".csv", ".fasta")
-print(f"Writing FASTA file to {input_file}")
 
-gene_column = args.gene_column
-orf_column = args.orf_column
+def main(args):
 
-with open(args.input, "r") as csvfile, open(input_file, "w") as fasta_file:
-    reader = csv.DictReader(csvfile)
-    for row in reader:
-        if gene_column and not orf_column:
-            name = row[gene_column]
-        elif not gene_column and orf_column:
-            name = row[orf_column]
-        elif gene_column and orf_column:
-            name = f"{row[gene_column]}_{row[orf_column]}"
-        else:
-            raise ValueError("Either gene and/or ORF columns must be specified.")
+    # Open CSV and GPSW files
+    csv = pd.read_csv(args.input)
+    gpsw = pd.read_csv(args.gpsw)
 
-        sequence = row[args.sequence_column]
+    # Rename CSV columns for consistency
+    csv.rename(
+        columns={
+            args.gene_column: "gene",
+            args.orf_column: "orf_id",
+            args.sequence_column: "sequence",
+        },
+        inplace=True,
+    )
 
-        # Write the sequence in FASTA format
-        fasta_file.write(f">{name}\n")
-        fasta_file.write(f"{sequence}\n")
+    # Keep only relevant columns in csv
+    csv = csv[["orf_id", "gene", "sequence"]]
 
-print("Done!")
+    ## Prepare data for FASTA files based on stability conditions
+    _list = ["stabilised", "destabilised"]
+
+    for stability in _list:
+        # Filter the GPSW DataFrame based on the stability condition
+        gpsw_filtered = gpsw[gpsw[stability] == True]
+
+        # Create FASTA file for the current stability condition
+        create_fasta(gpsw_filtered, csv, stability, args)
+
+    ## Prepare data for background sequences
+    # Absolute dPSI should be less than the background cutoff
+    df = gpsw[abs(gpsw["delta_PSI_mean"]) < args.background_dpsi_cutoff]
+
+    # Create FASTA file for background sequences
+    create_fasta(df, csv, "background", args)
+
+    print("Done!")
+
+
+if __name__ == "__main__":
+    # Set up the argument parser
+    parser = argparse.ArgumentParser(
+        description="Convert ORF amino acid sequences from CSV to FASTA format."
+    )
+
+    parser.add_argument(
+        "-i",
+        "--input",
+        required=True,
+        type=str,
+        help="Path to the input CSV file containing ORF sequences.",
+    )
+
+    parser.add_argument(
+        "-g",
+        "--gene-column",
+        required=True,
+        help="Name of the column containing gene names.",
+    )
+
+    parser.add_argument(
+        "-o",
+        "--orf-column",
+        required=True,
+        help="Name of the column containing ORF names.",
+    )
+
+    parser.add_argument(
+        "-s",
+        "--sequence-column",
+        required=True,
+        type=str,
+        help="Name of the column containing amino acid sequences.",
+    )
+
+    parser.add_argument(
+        "--gpsw",
+        required=True,
+        type=str,
+        help="GPSW gene summary file",
+    )
+
+    parser.add_argument(
+        "-d",
+        "--dpsi-cutoff",
+        type=float,
+        default=1.0,
+        help="dPSI cutoff value for filtering sequences",
+    )
+
+    parser.add_argument(
+        "-b",
+        "--background-dpsi-cutoff",
+        type=float,
+        default=0.1,
+        help="dPSI cutoff value for filtering background sequences",
+    )
+
+    parser.add_argument(
+        "--outdir",
+        default=".",
+        type=str,
+        help="Output directory for FASTA files (default: current directory)",
+    )
+
+    args = parser.parse_args()
+
+    main(args)

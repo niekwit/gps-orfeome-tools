@@ -1,7 +1,7 @@
 # gps-orfeome-tools
 Extra tools for Global Protein Stability profiling analysis
 
-## Installation of software dependencies
+# Installation of software dependencies
 
 ```bash
 $ conda env create -f environment.yml
@@ -68,13 +68,13 @@ The script will generate a PDF file named `barcode_profiles.pdf` containing the 
 
 ### Description
 
-This script creates a FASTA file containing protein sequences for each ORF in the provided CSV file. 
+This script processes a gene summary file from a GPSW analysis along with an annotation file containing ORF sequences. It filters the data based on user-defined dPSI cutoffs and generates three separate FASTA files containing the protein sequences for stabilised, destabilised, and background ORFs.
 
 ### Usage
 
 ```console
 $ python create_protein_fasta.py --help
-usage: create_protein_fasta.py [-h] -i INPUT [-g GENE_COLUMN] [-o ORF_COLUMN] -s SEQUENCE_COLUMN
+usage: create_protein_fasta.py [-h] -i INPUT -g GENE_COLUMN -o ORF_COLUMN -s SEQUENCE_COLUMN --gpsw GPSW [-d DPSI_CUTOFF] [-b BACKGROUND_DPSI_CUTOFF] [--outdir OUTDIR]
 
 Convert ORF amino acid sequences from CSV to FASTA format.
 
@@ -88,10 +88,21 @@ options:
                         Name of the column containing ORF names.
   -s SEQUENCE_COLUMN, --sequence-column SEQUENCE_COLUMN
                         Name of the column containing amino acid sequences.
+  --gpsw GPSW           GPSW gene summary file
+  -d DPSI_CUTOFF, --dpsi-cutoff DPSI_CUTOFF
+                        dPSI cutoff value for filtering sequences
+  -b BACKGROUND_DPSI_CUTOFF, --background-dpsi-cutoff BACKGROUND_DPSI_CUTOFF
+                        dPSI cutoff value for filtering background sequences
+  --outdir OUTDIR       Output directory for FASTA files (default: current directory)
 ```
 
-When both GENE_COLUMN and ORF_COLUMN are provided, the script will use both columns to create headers in the FASTA file. If either column name is parsed, only that column will be used for the header.
 
 ### Output
 
-The script will generate a FASTA file named `orf_sequences.fasta` containing the protein sequences for each ORF in the provided CSV file. Each sequence will be prefixed with a header line containing the ORF name and gene name.
+The script generates three FASTA files in the specified output directory (--outdir). The base name of these files is derived from the --gpsw argument.
+
+* <gpsw_base_name>_stabilised.fasta: This file contains protein sequences for ORFs identified as stabilized, based on the stabilised column in the GPSW summary file.
+
+* <gpsw_base_name>_destabilised.fasta: This file contains protein sequences for ORFs identified as destabilized, based on the destabilised column in the GPSW summary file.
+
+* <gpsw_base_name>_background.fasta: This file contains protein sequences for ORFs that are considered "background" (i.e., not significantly stabilized or destabilized). The criteria for this is that the absolute dPSI_mean value is less than the --background-dpsi-cutoff value.

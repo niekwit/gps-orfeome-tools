@@ -6,7 +6,7 @@
 #2. Path to text file containing ORF names (one per line)
 #3. String indicating dimensions of the plot (e.g., "2x3")
 #4. String indicating whether to include barcodes with
-#   twin peaks (twinpeaks=TRUE/FALSE)
+#   twin peaks (keeptwinpeaks=TRUE/FALSE)
 
 # Redirect R output to log
 log <- file(
@@ -25,6 +25,9 @@ sink(log, type = "message")
 
 library(tidyverse)
 library(cowplot)
+
+# Print full command line arguments to log
+print(commandArgs(trailingOnly = FALSE))
 
 # Get command line arguments
 args <- commandArgs(trailingOnly = TRUE)
@@ -115,10 +118,8 @@ if (twinpeaks) {
 df <- df %>%
   mutate(gene.id = paste0(gene, "_", orf_id)) %>%
   filter(orf_id %in% orfs) %>%
-  left_join(orfs_df, by = "orf_id", multiple = "all") %>%
   dplyr::select(
     gene.id,
-    category,
     starts_with(ref_sample),
     starts_with(test_sample),
     twin_peaks,
@@ -239,15 +240,22 @@ p <- ggplot(
 
 # Save plot to file
 output_file <- paste0(
-  "barcode_profiles_",
-  Sys.Date(),
+  str_replace(
+    basename(csv_file),
+    "_barcode.summary.csv",
+    ""
+  ),
   "_",
-  format(Sys.time(), "%H-%M-%S"),
-  ".pdf"
+  str_replace(basename(orf_file), ".txt", ""),
+  "_profiles.pdf"
 )
+outdir <- dirname(orf_file)
+
+print(paste("Saving plot to", output_file))
 ggsave(
-  filename = output_file,
+  filename = file.path(outdir, output_file),
   plot = p,
   width = 2.2 * ncol,
   height = 2 * nrow,
 )
+print("Done!")
